@@ -7,7 +7,7 @@ const gameFinished = ref(false)
 const currentSceneId = ref(1)
 const moveCount = ref(0)
 const lastSceneId = ref(0)
-const deadEndProb = ref(0.15) // 死胡同初始概率 15%
+const deadEndProb = ref(0.4) // 死胡同初始概率 40%
 
 // 节点记录：记录所有生成过的节点场景 ID
 // Key 为路径指纹，例如 "main_0" 或 "main_2_left_forward"
@@ -22,7 +22,7 @@ const isOnMainPath = ref(true)
 const lastMainPathIndex = ref(0) // 记录偏离主路时的位置
 
 const gameState = reactive({
-  floor: 1,
+  floor: 0,
   hp: 100,
   maxHp: 100,
   weapon: '无',
@@ -74,22 +74,22 @@ const scenes: Record<number, Scene> = {
   },
   8: {
     id: 8,
-    text: '你到达了终点，游戏结束',
-    allowedMoves: []
+    text: '你发现了通往下一层的楼梯！',
+    allowedMoves: ['forward', 'backward']
   }
 }
 
 const currentScene = computed(() => scenes[currentSceneId.value])
 
-// 开始游戏
-const startGame = () => {
-  gameStarted.value = true
-  gameFinished.value = false
-  currentSceneId.value = 1
-  moveCount.value = 0
-  lastSceneId.value = 0
-  deadEndProb.value = 0.15
-  
+// 获取场景图片路径
+const getSceneImage = (id: number) => {
+  // 根据实际文件列表，scene7 是 jpg，其余是 png
+  const ext = id === 7 ? 'jpg' : 'png'
+  return new URL(`../assets/scene${id}.${ext}`, import.meta.url).href
+}
+
+// 生成主路逻辑
+const generateMaze = () => {
   // 初始化缓存和路径
   nodeCache.value = {}
   currentPath.value = 'main_0'
@@ -97,7 +97,6 @@ const startGame = () => {
   // 生成主路
   mainPathIndex.value = 0
   isOnMainPath.value = true
-  const directions = ['forward', 'left', 'right'] // 主路不包含 backward
   const path: string[] = []
   const pathScenes: number[] = [1]
   
@@ -115,9 +114,25 @@ const startGame = () => {
       nodeCache.value[`main_${i+1}`] = nextSceneId // 记录主路固定节点
     }
   }
+
+  // 场景 8 固定在主路终点
+  nodeCache.value['main_5'] = 8
   
   mainPath.value = path
   mainPathScenes.value = pathScenes
+}
+
+// 开始游戏
+const startGame = () => {
+  gameStarted.value = true
+  gameFinished.value = false
+  currentSceneId.value = 1
+  moveCount.value = 0
+  lastSceneId.value = 0
+  deadEndProb.value = 0.4
+  gameState.floor = 0
+  
+  generateMaze()
 }
 
 // 辅助函数：获取已记录节点或生成新节点
@@ -131,7 +146,7 @@ const getOrCreateNode = (pathKey: string): number => {
   const roll = Math.random()
   if (moveCount.value >= 3 && lastSceneId.value !== 7 && roll < deadEndProb.value) {
     nextId = 7
-    deadEndProb.value = 0.15 // 命中后重置
+    deadEndProb.value = 0.4 // 命中后重置为 40%
   } else {
     // 排除掉当前的场景，增加变化
     const possibleScenes = [1, 2, 3, 4, 5, 6].filter(id => id !== currentSceneId.value)
@@ -145,7 +160,18 @@ const getOrCreateNode = (pathKey: string): number => {
 
 // 移动逻辑
 const handleMove = (direction: string) => {
-  if (gameFinished.value) return
+  if (gameFinished.value && currentSceneId.value !== 8) return
+
+  // 特殊处理场景 8 的“通往下一层”
+  if (currentSceneId.value === 8 && direction === 'forward') {
+    gameState.floor--
+    moveCount.value = 0
+    lastSceneId.value = 0
+    deadEndProb.value = 0.4
+    generateMaze()
+    currentSceneId.value = 1
+    return
+  }
 
   lastSceneId.value = currentSceneId.value
   moveCount.value++
@@ -159,12 +185,7 @@ const handleMove = (direction: string) => {
       // 走对了
       mainPathIndex.value++
       newPath = `main_${mainPathIndex.value}`
-      if (mainPathIndex.value === 5) {
-        nextSceneId = 8
-        gameFinished.value = true
-      } else {
-        nextSceneId = nodeCache.value[newPath]
-      }
+      nextSceneId = nodeCache.value[newPath]
     } else if (direction === 'backward' && mainPathIndex.value > 0) {
       // 主路向后
       mainPathIndex.value--
@@ -180,7 +201,7 @@ const handleMove = (direction: string) => {
   } else {
     // 不在主路上
     if (direction === 'backward') {
-      // 回到主路偏离点
+      // 回到进入错误路径的主路节点
       isOnMainPath.value = true
       mainPathIndex.value = lastMainPathIndex.value
       newPath = `main_${mainPathIndex.value}`
@@ -194,10 +215,6 @@ const handleMove = (direction: string) => {
 
   currentPath.value = newPath
   currentSceneId.value = nextSceneId
-  
-  if (moveCount.value % 10 === 0) {
-    gameState.floor++
-  }
 }
 
 // 检查动作是否可用
@@ -227,7 +244,9 @@ const isActionDisabled = (action: 'forward' | 'backward' | 'left' | 'right') => 
                 class="game-btn" 
                 :disabled="isActionDisabled('forward')"
                 @click="handleMove('forward')"
-              >向前</button>
+              >
+                {{ currentSceneId === 8 ? '通往下一层' : '向前' }}
+              </button>
             </div>
             
             <div class="pad-row middle">
@@ -262,21 +281,20 @@ const isActionDisabled = (action: 'forward' | 'backward' | 'left' | 'right') => 
 
               <!-- 中央画面文本 -->
               <div class="scene-container">
+                <div class="scene-image-wrapper">
+                  <img :src="getSceneImage(currentSceneId)" :alt="'Scene ' + currentSceneId" class="scene-image" />
+                </div>
                 <div class="scene-text">
                   {{ currentScene.text }}
                 </div>
-                <div v-if="isOnMainPath && !gameFinished" class="main-path-hint">
+                <div v-if="isOnMainPath && currentSceneId !== 8" class="main-path-hint">
                   你已经在主路上
-                </div>
-                <div v-if="gameFinished" class="game-over-container">
-                  <div class="game-over-hint">你到达终点，游戏结束</div>
-                  <button class="game-btn restart-btn" @click="startGame">重新开始</button>
                 </div>
               </div>
 
               <!-- 向右按钮 -->
               <button 
-                class="game-btn" 
+                class="game-btn right-btn-offset" 
                 :disabled="isActionDisabled('right')"
                 @click="handleMove('right')"
               >向右</button>
@@ -336,7 +354,26 @@ const isActionDisabled = (action: 'forward' | 'backward' | 'left' | 'right') => 
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 10px;
+  gap: 15px;
+  /* 移除可能导致偏移的 margin */
+}
+
+.scene-image-wrapper {
+  width: 720px;
+  height: 540px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  overflow: hidden;
+  border: 2px solid #000;
+  background-color: #f0f0f0;
+  /* 移除 margin-bottom，改用 gap 控制 */
+}
+
+.scene-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .scene-text {
@@ -405,6 +442,10 @@ const isActionDisabled = (action: 'forward' | 'backward' | 'left' | 'right') => 
   cursor: not-allowed;
 }
 
+.right-btn-offset {
+  transform: translateY(-30px); /* 向上提 30px */
+}
+
 /* 控制盘布局 */
 .control-pad {
   display: flex;
@@ -413,11 +454,15 @@ const isActionDisabled = (action: 'forward' | 'backward' | 'left' | 'right') => 
 }
 
 .top-row {
-  margin-bottom: 15vh;
+  margin-bottom: 20px;
 }
 
 .bottom-row {
-  margin-top: 15vh;
+  margin-top: 20px;
+}
+
+.pad-row.middle {
+  align-items: center; /* 确保中间一排元素垂直居中 */
 }
 
 .pad-row {
@@ -432,6 +477,7 @@ const isActionDisabled = (action: 'forward' | 'backward' | 'left' | 'right') => 
   position: relative;
   display: flex;
   align-items: center;
+  transform: translateY(-30px); /* 向上提 30px */
 }
 
 .side-status-bar {
@@ -445,6 +491,8 @@ const isActionDisabled = (action: 'forward' | 'backward' | 'left' | 'right') => 
   padding-right: 15px;
   min-width: 120px;
   white-space: nowrap;
+  top: 50%;
+  transform: translateY(-50%); /* 保持相对于按钮居中 */
 }
 
 .side-status-item {
