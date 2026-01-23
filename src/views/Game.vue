@@ -12,7 +12,13 @@ const deadEndProb = ref(0.4) // 死胡同初始概率 40%
 // 节点记录：记录所有生成过的节点场景 ID
 // Key 为路径指纹，例如 "main_0" 或 "main_2_left_forward"
 const nodeCache = ref<Record<string, number>>({})
+const nodeStates = ref<Record<string, any>>({}) // 记录特定节点的额外状态，如宝箱是否打开
 const currentPath = ref('main_0')
+
+// 提示框开关
+const showHintBox = ref(false)
+const hintText = ref('这里是文本')
+const onHintClose = ref<(() => void) | null>(null) // 提示框关闭后的回调
 
 // 主路相关状态
 const mainPath = ref<string[]>([])
@@ -20,13 +26,18 @@ const mainPathScenes = ref<number[]>([])
 const mainPathIndex = ref(0)
 const isOnMainPath = ref(true)
 const lastMainPathIndex = ref(0) // 记录偏离主路时的位置
+const scene9Count = ref(0) // 当前层生成的场景 9 数量
+const chestProb = ref(0.4) // 宝箱初始概率 40%
 
 const gameState = reactive({
   floor: 0,
   hp: 100,
   maxHp: 100,
   weapon: '无',
-  armor: '无'
+  weaponLevel: 0,
+  armor: '无',
+  armorLevel: 0,
+  keys: 0
 })
 
 // 场景定义
@@ -76,13 +87,31 @@ const scenes: Record<number, Scene> = {
     id: 8,
     text: '你发现了通往下一层的楼梯！',
     allowedMoves: ['forward', 'backward']
+  },
+  9: {
+    id: 9,
+    text: '你发现了一个宝箱！',
+    allowedMoves: ['forward', 'backward']
   }
 }
 
-const currentScene = computed(() => scenes[currentSceneId.value])
+const currentScene = computed(() => {
+  const scene = { ...scenes[currentSceneId.value] }
+  // 如果是场景 9 且宝箱已打开，修改文字
+  if (currentSceneId.value === 9 && nodeStates.value[currentPath.value]?.opened) {
+    scene.text = '一个打开过的宝箱'
+  }
+  return scene
+})
 
 // 获取场景图片路径
 const getSceneImage = (id: number) => {
+  if (id === 9) {
+    const state = nodeStates.value[currentPath.value]
+    if (state?.chestOpenedFinal) return new URL(`../assets/scene9_3.png`, import.meta.url).href
+    if (state?.opened) return new URL(`../assets/scene9_2.png`, import.meta.url).href
+    return new URL(`../assets/scene9.png`, import.meta.url).href
+  }
   // 根据实际文件列表，scene7 是 jpg，其余是 png
   const ext = id === 7 ? 'jpg' : 'png'
   return new URL(`../assets/scene${id}.${ext}`, import.meta.url).href
@@ -92,7 +121,10 @@ const getSceneImage = (id: number) => {
 const generateMaze = () => {
   // 初始化缓存和路径
   nodeCache.value = {}
+  nodeStates.value = {}
   currentPath.value = 'main_0'
+  scene9Count.value = 0
+  chestProb.value = 0.4 // 新的一层重置宝箱概率
   
   // 生成主路
   mainPathIndex.value = 0
@@ -102,13 +134,13 @@ const generateMaze = () => {
   
   nodeCache.value['main_0'] = 1 // 起始点固定为场景 1
   
-  for (let i = 0; i < 5; i++) {
+  for (let i = 0; i < 4; i++) {
     const currentSceneIdForPath = pathScenes[i]
     const allowed = scenes[currentSceneIdForPath].allowedMoves.filter(m => m !== 'backward')
     const dir = allowed[Math.floor(Math.random() * allowed.length)]
     path.push(dir)
     
-    if (i < 4) {
+    if (i < 3) {
       const nextSceneId = Math.floor(Math.random() * 6) + 1
       pathScenes.push(nextSceneId)
       nodeCache.value[`main_${i+1}`] = nextSceneId // 记录主路固定节点
@@ -116,7 +148,7 @@ const generateMaze = () => {
   }
 
   // 场景 8 固定在主路终点
-  nodeCache.value['main_5'] = 8
+  nodeCache.value['main_4'] = 8
   
   mainPath.value = path
   mainPathScenes.value = pathScenes
@@ -145,17 +177,35 @@ const getOrCreateNode = (pathKey: string): number => {
   let nextId: number
   const roll = Math.random()
   if (moveCount.value >= 3 && lastSceneId.value !== 7 && roll < deadEndProb.value) {
-    nextId = 7
+    // 判定是否将死胡同替换为场景 9（宝箱）
+    // 逻辑：初始 40%，每遇到一个死胡同（场景 7）增加 15%
+    if (Math.random() < chestProb.value && scene9Count.value < 2) {
+      nextId = 9
+      scene9Count.value++
+      nodeStates.value[pathKey] = { opened: false, chestOpenedFinal: false }
+    } else {
+      nextId = 7
+      chestProb.value += 0.15 // 遇到死胡同，增加下次出现宝箱的概率
+    }
     deadEndProb.value = 0.4 // 命中后重置为 40%
   } else {
     // 排除掉当前的场景，增加变化
     const possibleScenes = [1, 2, 3, 4, 5, 6].filter(id => id !== currentSceneId.value)
     nextId = possibleScenes[Math.floor(Math.random() * possibleScenes.length)]
-    deadEndProb.value += 0.1 // 未命中则累加 10%
+    deadEndProb.value += 0.2 // 未命中则累加 20%
   }
 
   nodeCache.value[pathKey] = nextId
   return nextId
+}
+
+// 提示框关闭逻辑
+const handleCloseHint = () => {
+  showHintBox.value = false
+  if (onHintClose.value) {
+    onHintClose.value()
+    onHintClose.value = null
+  }
 }
 
 // 移动逻辑
@@ -170,6 +220,39 @@ const handleMove = (direction: string) => {
     deadEndProb.value = 0.4
     generateMaze()
     currentSceneId.value = 1
+    return
+  }
+
+  // 特殊处理场景 9 的“打开宝箱”
+  if (currentSceneId.value === 9 && direction === 'forward') {
+    const state = nodeStates.value[currentPath.value]
+    if (state && !state.opened) {
+      state.opened = true
+      const rand = Math.random()
+      let item = ''
+      if (rand < 0.33) {
+        item = '铁剑'
+        if (gameState.weapon === '无') {
+          gameState.weapon = '铁剑'
+          gameState.weaponLevel = 1
+        }
+      } else if (rand < 0.66) {
+        item = '铠甲'
+        if (gameState.armor === '无') {
+          gameState.armor = '铠甲'
+          gameState.armorLevel = 1
+        }
+      } else {
+        item = '钥匙'
+        gameState.keys++
+      }
+      
+      hintText.value = `你获得了${item}`
+      showHintBox.value = true
+      onHintClose.value = () => {
+        state.chestOpenedFinal = true
+      }
+    }
     return
   }
 
@@ -219,8 +302,13 @@ const handleMove = (direction: string) => {
 
 // 检查动作是否可用
 const isActionDisabled = (action: 'forward' | 'backward' | 'left' | 'right') => {
-  // 第一个场景且向后不可用
-  if (moveCount.value === 0 && action === 'backward') return true
+  // 每一层的第一个主路节点（main_0）且在主路上时，向后不可用
+  if (isOnMainPath.value && mainPathIndex.value === 0 && action === 'backward') return true
+  
+  // 场景 9 宝箱打开后向前不可用
+  if (currentSceneId.value === 9 && action === 'forward' && nodeStates.value[currentPath.value]?.opened) {
+    return true
+  }
   
   return !currentScene.value.allowedMoves.includes(action)
 }
@@ -245,7 +333,7 @@ const isActionDisabled = (action: 'forward' | 'backward' | 'left' | 'right') => 
                 :disabled="isActionDisabled('forward')"
                 @click="handleMove('forward')"
               >
-                {{ currentSceneId === 8 ? '通往下一层' : '向前' }}
+                {{ currentSceneId === 8 ? '通往下一层' : (currentSceneId === 9 ? '打开宝箱' : '向前') }}
               </button>
             </div>
             
@@ -268,6 +356,10 @@ const isActionDisabled = (action: 'forward' | 'backward' | 'left' | 'right') => 
                   <div class="side-status-item">
                     <span class="side-label">护甲</span>
                     <span class="side-value">{{ gameState.armor }}</span>
+                  </div>
+                  <div class="side-status-item">
+                    <span class="side-label">钥匙</span>
+                    <span class="side-value">{{ gameState.keys }}</span>
                   </div>
                 </div>
 
@@ -312,9 +404,26 @@ const isActionDisabled = (action: 'forward' | 'backward' | 'left' | 'right') => 
 
           <!-- 场景标记与调试信息 -->
           <div class="debug-info">
+            <div class="debug-item">
+              <button class="game-btn toggle-btn" @click="showHintBox = !showHintBox">
+                {{ showHintBox ? '关闭提示框' : '打开提示框' }}
+              </button>
+            </div>
             <div class="debug-item">主路: {{ mainPath.join(' -> ') }}</div>
             <div class="debug-item">当前路径 ID: {{ currentPath }}</div>
             <div class="debug-item">场景 {{ currentSceneId }} ({{ isOnMainPath ? '主路' : '支路' }})</div>
+          </div>
+
+          <!-- 提示框内容 -->
+          <div v-if="showHintBox" class="hint-box-overlay">
+            <div class="hint-box-container">
+              <div class="hint-box">
+                <div class="hint-content">
+                  {{ hintText }}
+                </div>
+                <button class="game-btn continue-btn" @click="handleCloseHint">继续</button>
+              </div>
+            </div>
           </div>
         </div>
     </div>
@@ -530,5 +639,73 @@ const isActionDisabled = (action: 'forward' | 'backward' | 'left' | 'right') => 
   font-size: 12px;
   color: #999;
   margin-bottom: 2px;
+}
+
+.toggle-btn {
+  padding: 5px 10px;
+  font-size: 12px;
+  min-width: auto;
+  margin-bottom: 10px;
+}
+
+.hint-box-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  pointer-events: none; /* 允许点击下方的按钮，除非你想让它遮挡 */
+  z-index: 100;
+}
+
+.hint-box-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+  transform: translateY(-30px); /* 原来 -20px，再往上移 50px，总共 -70px */
+}
+
+.hint-box {
+  width: calc(720px * 0.8); /* 图片宽度的 80% */
+  height: 400px;/* 图片高度的 80% */
+  background-color: rgba(255, 255, 255, 0.95);
+  border: 5px solid #000;
+  border-radius: 20px;
+  padding: 50px 50px 20px 50px;
+  box-sizing: border-box;
+  text-align: center;
+  font-size: 24px;
+  font-weight: bold;
+  pointer-events: auto; /* 提示框本身可以接收点击 */
+  box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+  
+  /* 内部布局：垂直排列，文本在上，按钮在下 */
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.hint-content {
+  width: 100%;
+  flex: 1;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.continue-btn {
+  pointer-events: auto;
+  background-color: #000;
+  color: #fff;
+  margin-top: 20px; /* 按钮与上方文本的间距 */
+}
+
+.continue-btn:hover {
+  background-color: #333;
 }
 </style>
