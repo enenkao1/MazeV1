@@ -20,6 +20,28 @@ const showHintBox = ref(false)
 const hintText = ref('这里是文本')
 const onHintClose = ref<(() => void) | null>(null) // 提示框关闭后的回调
 
+// 进度条相关逻辑
+const isProgressing = ref(false)
+const progressWidth = ref(0)
+
+const triggerCountdown = () => {
+  if (isProgressing.value) return
+  
+  isProgressing.value = true
+  progressWidth.value = 0
+  
+  // 使用 setTimeout 确保 DOM 更新后再开始动画
+  setTimeout(() => {
+    progressWidth.value = 100
+  }, 50)
+
+  // 5秒后重置
+  setTimeout(() => {
+    isProgressing.value = false
+    progressWidth.value = 0
+  }, 5050)
+}
+
 // 主路相关状态
 const mainPath = ref<string[]>([])
 const mainPathScenes = ref<number[]>([])
@@ -385,11 +407,18 @@ const isActionDisabled = (action: 'forward' | 'backward' | 'left' | 'right') => 
               </div>
 
               <!-- 向右按钮 -->
-              <button 
-                class="game-btn right-btn-offset" 
-                :disabled="isActionDisabled('right')"
-                @click="handleMove('right')"
-              >向右</button>
+              <div class="side-action-wrapper">
+                <button 
+                  class="game-btn" 
+                  :disabled="isActionDisabled('right')"
+                  @click="handleMove('right')"
+                >向右</button>
+
+                <!-- 进度条测试按钮：放在主路提示的水平位置上方 -->
+                <div class="side-test-bar">
+                  <button class="game-btn test-btn" @click="triggerCountdown">进度条</button>
+                </div>
+              </div>
             </div>
 
             <!-- 向下按钮 -->
@@ -423,6 +452,19 @@ const isActionDisabled = (action: 'forward' | 'backward' | 'left' | 'right') => 
                 </div>
                 <button class="game-btn continue-btn" @click="handleCloseHint">继续</button>
               </div>
+            </div>
+          </div>
+
+          <!-- 进度条显示 -->
+          <div v-if="isProgressing" class="progress-overlay">
+            <div class="progress-container">
+              <div 
+                class="progress-fill" 
+                :style="{ 
+                  width: progressWidth + '%',
+                  transition: progressWidth > 0 ? 'width 5s linear' : 'none'
+                }"
+              ></div>
             </div>
           </div>
         </div>
@@ -582,7 +624,7 @@ const isActionDisabled = (action: 'forward' | 'backward' | 'left' | 'right') => 
 }
 
 /* 侧边状态栏样式 */
-.side-status-wrapper {
+.side-status-wrapper, .side-action-wrapper {
   position: relative;
   display: flex;
   align-items: center;
@@ -604,6 +646,33 @@ const isActionDisabled = (action: 'forward' | 'backward' | 'left' | 'right') => 
   transform: translateY(-50%); /* 保持相对于按钮居中 */
 }
 
+.side-test-bar {
+  position: absolute;
+  left: calc(100% + 100px); /* 对应左边的 100px */
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+  text-align: left;
+  border-left: 2px solid #000;
+  padding-left: 15px;
+  min-width: 120px;
+  white-space: nowrap;
+  top: 50%;
+  transform: translateY(-100%); /* 向上提一点，使其在“主路提示”的上方水平线 */
+}
+
+.test-btn {
+  padding: 5px 15px;
+  font-size: 14px;
+  min-width: 80px;
+  background-color: #000;
+  color: #fff;
+}
+
+.test-btn:hover {
+  background-color: #333;
+}
+
 .side-status-item {
   display: flex;
   flex-direction: row; /* 调整为水平排列 */
@@ -621,6 +690,36 @@ const isActionDisabled = (action: 'forward' | 'backward' | 'left' | 'right') => 
 .side-value {
   font-size: 20px; /* 字体调整为 20px */
   font-weight: bold;
+}
+
+/* 进度条样式 */
+.progress-overlay {
+  position: absolute;
+  bottom: 80px;
+  left: 0;
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  z-index: 50;
+  pointer-events: none;
+}
+
+.progress-container {
+  width: 400px;
+  height: 20px;
+  background-color: #000;
+  border: 2px solid #000;
+  position: relative;
+  overflow: hidden;
+}
+
+.progress-fill {
+  position: absolute;
+  right: 0; /* 从右往左 */
+  top: 0;
+  height: 100%;
+  background-color: #fff;
+  width: 0;
 }
 
 .debug-info {
